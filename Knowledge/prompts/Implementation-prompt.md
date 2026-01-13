@@ -1,0 +1,1 @@
+ok give me an exhaustive plan for the implementations for week 1 taking into account the present documentation of Architecture and its schema and project_based road map

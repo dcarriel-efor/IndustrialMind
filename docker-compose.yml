@@ -1,0 +1,304 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Event Streaming Layer
+  # ============================================================================
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: industrialmind-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: industrialmind-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Time Series Database
+  # ============================================================================
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: industrialmind-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: password123
+      DOCKER_INFLUXDB_INIT_ORG: industrialmind
+      DOCKER_INFLUXDB_INIT_BUCKET: sensors
+      DOCKER_INFLUXDB_INIT_RETENTION: 0
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: industrialmind-token-123456
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Relational Database
+  # ============================================================================
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: industrialmind-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: industrialmind
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_MULTIPLE_DATABASES: mlflow,airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d industrialmind"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Caching Layer
+  # ============================================================================
+
+  redis:
+    image: redis:7-alpine
+    container_name: industrialmind-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Graph Database (for later phases)
+  # ============================================================================
+
+  # neo4j:
+  #   image: neo4j:5.12
+  #   container_name: industrialmind-neo4j
+  #   ports:
+  #     - "7474:7474"
+  #     - "7687:7687"
+  #   environment:
+  #     NEO4J_AUTH: neo4j/password123
+  #     NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+  #   volumes:
+  #     - neo4j-data:/data
+  #     - neo4j-logs:/logs
+  #   healthcheck:
+  #     test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password123", "RETURN 1"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # ============================================================================
+  # Vector Database (for later phases)
+  # ============================================================================
+
+  # chromadb:
+  #   image: chromadb/chroma:0.4.15
+  #   container_name: industrialmind-chromadb
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - chromadb-data:/chroma/chroma
+  #   environment:
+  #     IS_PERSISTENT: "TRUE"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # ============================================================================
+  # MLOps Platform
+  # ============================================================================
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.8.1
+    container_name: industrialmind-mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5011:5000"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://admin:password123@postgres:5432/mlflow
+      MLFLOW_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - mlflow-artifacts:/mlflow/artifacts
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://admin:password123@postgres:5432/mlflow
+      --default-artifact-root /mlflow/artifacts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Observability Stack
+  # ============================================================================
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: industrialmind-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: industrialmind-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3011:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:3011
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================================
+  # Application Services (to be implemented)
+  # ============================================================================
+
+  # data-simulator:
+  #   build:
+  #     context: ./services/data_platform/simulator
+  #     dockerfile: Dockerfile
+  #   container_name: industrialmind-data-simulator
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   environment:
+  #     KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  #     KAFKA_TOPIC: sensor-readings
+  #   env_file:
+  #     - .env
+
+  # data-ingestion:
+  #   build:
+  #     context: ./services/data_platform/ingestion
+  #     dockerfile: Dockerfile
+  #   container_name: industrialmind-data-ingestion
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #     influxdb:
+  #       condition: service_healthy
+  #   environment:
+  #     KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  #     KAFKA_TOPIC: sensor-readings
+  #     INFLUXDB_URL: http://influxdb:8086
+  #     INFLUXDB_TOKEN: industrialmind-token-123456
+  #     INFLUXDB_ORG: industrialmind
+  #     INFLUXDB_BUCKET: sensors
+  #   env_file:
+  #     - .env
+
+  # dashboard:
+  #   build:
+  #     context: ./services/dashboard
+  #     dockerfile: Dockerfile
+  #   container_name: industrialmind-dashboard
+  #   depends_on:
+  #     influxdb:
+  #       condition: service_healthy
+  #     postgres:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8501:8501"
+  #   environment:
+  #     INFLUXDB_URL: http://influxdb:8086
+  #     INFLUXDB_TOKEN: industrialmind-token-123456
+  #     INFLUXDB_ORG: industrialmind
+  #     INFLUXDB_BUCKET: sensors
+  #     POSTGRES_URL: postgresql://admin:password123@postgres:5432/industrialmind
+  #   env_file:
+  #     - .env
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  influxdb-data:
+  influxdb-config:
+  postgres-data:
+  redis-data:
+  # neo4j-data:
+  # neo4j-logs:
+  # chromadb-data:
+  mlflow-artifacts:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  default:
+    name: industrialmind-network
+    driver: bridge
