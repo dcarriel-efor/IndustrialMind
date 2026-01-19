@@ -1,0 +1,6 @@
+kafka-python==2.0.2
+influxdb-client==1.38.0
+pydantic==2.5.0
+python-dotenv==1.0.0
+structlog==23.2.0
+tenacity==8.2.3

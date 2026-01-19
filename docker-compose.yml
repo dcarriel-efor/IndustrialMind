@@ -224,64 +224,95 @@ services:
       timeout: 5s
       retries: 5
 
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: industrialmind-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./infrastructure/loki/loki-config.yml:/etc/loki/local-config.yaml
+      - loki-data:/loki
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: industrialmind-promtail
+    volumes:
+      - ./infrastructure/promtail/promtail-config.yml:/etc/promtail/config.yml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - default
+
   # ============================================================================
   # Application Services (to be implemented)
   # ============================================================================
 
-  # data-simulator:
-  #   build:
-  #     context: ./services/data_platform/simulator
-  #     dockerfile: Dockerfile
-  #   container_name: industrialmind-data-simulator
-  #   depends_on:
-  #     kafka:
-  #       condition: service_healthy
-  #   environment:
-  #     KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-  #     KAFKA_TOPIC: sensor-readings
-  #   env_file:
-  #     - .env
+  data-simulator:
+    build:
+      context: .
+      dockerfile: ./services/data_platform/simulator/Dockerfile
+    container_name: industrialmind-data-simulator
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: sensor-readings
+    env_file:
+      - .env
+    restart: unless-stopped
 
-  # data-ingestion:
-  #   build:
-  #     context: ./services/data_platform/ingestion
-  #     dockerfile: Dockerfile
-  #   container_name: industrialmind-data-ingestion
-  #   depends_on:
-  #     kafka:
-  #       condition: service_healthy
-  #     influxdb:
-  #       condition: service_healthy
-  #   environment:
-  #     KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-  #     KAFKA_TOPIC: sensor-readings
-  #     INFLUXDB_URL: http://influxdb:8086
-  #     INFLUXDB_TOKEN: industrialmind-token-123456
-  #     INFLUXDB_ORG: industrialmind
-  #     INFLUXDB_BUCKET: sensors
-  #   env_file:
-  #     - .env
+  data-ingestion:
+    build:
+      context: .
+      dockerfile: ./services/data_platform/ingestion/Dockerfile
+    container_name: industrialmind-data-ingestion
+    depends_on:
+      kafka:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: sensor-readings
+      KAFKA_GROUP_ID: ingestion-service
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: industrialmind-token-123456
+      INFLUXDB_ORG: industrialmind
+      INFLUXDB_BUCKET: sensors
+    env_file:
+      - .env
+    restart: unless-stopped
 
-  # dashboard:
-  #   build:
-  #     context: ./services/dashboard
-  #     dockerfile: Dockerfile
-  #   container_name: industrialmind-dashboard
-  #   depends_on:
-  #     influxdb:
-  #       condition: service_healthy
-  #     postgres:
-  #       condition: service_healthy
-  #   ports:
-  #     - "8501:8501"
-  #   environment:
-  #     INFLUXDB_URL: http://influxdb:8086
-  #     INFLUXDB_TOKEN: industrialmind-token-123456
-  #     INFLUXDB_ORG: industrialmind
-  #     INFLUXDB_BUCKET: sensors
-  #     POSTGRES_URL: postgresql://admin:password123@postgres:5432/industrialmind
-  #   env_file:
-  #     - .env
+  dashboard:
+    build:
+      context: .
+      dockerfile: ./services/dashboard/Dockerfile
+    container_name: industrialmind-dashboard
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: industrialmind-token-123456
+      INFLUXDB_ORG: industrialmind
+      INFLUXDB_BUCKET: sensors
+    env_file:
+      - .env
+    restart: unless-stopped
 
 volumes:
   zookeeper-data:
@@ -297,6 +328,7 @@ volumes:
   mlflow-artifacts:
   prometheus-data:
   grafana-data:
+  loki-data:
 
 networks:
   default:

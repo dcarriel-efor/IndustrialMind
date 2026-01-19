@@ -4,9 +4,9 @@ Sensor reading data models.
 Defines Pydantic models for sensor data throughout the platform.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, ConfigDict
 
 
 class SensorMetadata(BaseModel):
@@ -83,7 +83,11 @@ class SensorReading(BaseModel):
     @validator('timestamp')
     def timestamp_not_future(cls, v):
         """Ensure timestamp is not in the future."""
-        if v > datetime.utcnow():
+        # Convert to offset-naive for comparison if needed
+        now = datetime.now(timezone.utc)
+        v_naive = v.replace(tzinfo=None) if v.tzinfo else v
+        now_naive = now.replace(tzinfo=None)
+        if v_naive > now_naive:
             raise ValueError('Timestamp cannot be in the future')
         return v
 
@@ -129,8 +133,9 @@ class SensorReading(BaseModel):
             "time": self.timestamp
         }
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_encoders={datetime: lambda v: v.isoformat()},
+        json_schema_extra={
             "example": {
                 "timestamp": "2024-01-15T10:30:00Z",
                 "machine_id": "MACHINE_001",
@@ -145,6 +150,7 @@ class SensorReading(BaseModel):
                 }
             }
         }
+    )
 
 
 class SensorReadingBatch(BaseModel):
